@@ -1,0 +1,16 @@
+[package]
+name = "clipper2_rust"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[build-dependencies]
+cmake = "0.1"
+
+[dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+plotters = "0.3.3"
+glam = "0.24"
