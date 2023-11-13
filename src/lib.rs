@@ -5,9 +5,6 @@ use std::vec::Vec;
 mod ffi {
     use libc::{c_int, c_long, c_double, c_char};
 
-    // NOTES:
-    // removed c_double variants due to them only adding a step that converts to int64_t for the actual computations
-
     pub type CPaths64 = *const c_long;
     pub type CPaths64Ref = *mut *mut c_long;
 
@@ -82,7 +79,7 @@ pub enum FillRule {
 // |N, 0   |x1, y1|x2, y2|...|xN, yN|
 // __________________________________
 //
-// N: size_t <=> number of coords
+// N: int64_t <=> number of coords
 // xN, yN: int64_t <=> said coords
 //
 // CPaths64 data structure
@@ -91,8 +88,8 @@ pub enum FillRule {
 // |len, N |     |     |...|pathN|
 // _______________________________
 //
-// len: size_t <=> array length
-// N: size_t <=> number of paths
+// len: int64_t <=> array length
+// N: int64_t <=> number of paths
 //
 // here, path1, path2, etc. aren't pointers to the structures
 // but rather represent the paths packed one after the other 
@@ -228,9 +225,10 @@ where
 #[cfg(test)]
 mod tests {
 
-    use crate::intersect;
+    use crate::{intersect, union, difference, xor};
     use crate::FillRule;
     use glam::I64Vec2;
+    use plotters::prelude::*;
 
     #[test]
     fn basic_test() {
@@ -250,5 +248,157 @@ mod tests {
 
         let res = intersect(box1_subj, box2_clip, FillRule::EvenOdd);
         //println!("res: {:?}", res);
+    }
+
+    fn ivec_to_cartesian(input: Vec<I64Vec2>) -> Vec<(f64, f64)> {
+        input.into_iter().map(|x| x.as_dvec2().into()).collect()
+    }
+
+    #[test]
+    fn plot_intersection() {
+        let root = BitMapBackend::new("intersection_test.png", (256, 256)).into_drawing_area();
+
+        root.fill(&WHITE);
+
+        let mut chart = ChartBuilder::on(&root)
+            .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
+
+        let subj_vertices = vec![vec![
+            I64Vec2::new(100, 50),
+            I64Vec2::new(10, 79),
+            I64Vec2::new(65, 2),
+            I64Vec2::new(65, 98),
+            I64Vec2::new(10, 21),
+        ]];
+
+        let clip_vertices = vec![vec![
+            I64Vec2::new(98, 63),
+            I64Vec2::new(4, 68),
+            I64Vec2::new(77, 8),
+            I64Vec2::new(52, 100),
+            I64Vec2::new(19, 12),
+        ]];
+
+        let intersection_vertices = intersect(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
+        println!("{:?}", intersection_vertices);
+
+        chart.draw_series(std::iter::once(Polygon::new(
+            ivec_to_cartesian(intersection_vertices[0].clone()),
+            RGBColor(255, 0, 255),
+        )));
+
+        root.present().unwrap();
+    }
+
+    #[test]
+    fn plot_union() {
+        let root = BitMapBackend::new("union_test.png", (256, 256)).into_drawing_area();
+
+        root.fill(&WHITE);
+
+        let mut chart = ChartBuilder::on(&root)
+            .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
+
+        let subj_vertices = vec![vec![
+            I64Vec2::new(100, 50),
+            I64Vec2::new(10, 79),
+            I64Vec2::new(65, 2),
+            I64Vec2::new(65, 98),
+            I64Vec2::new(10, 21),
+        ]];
+
+        let clip_vertices = vec![vec![
+            I64Vec2::new(98, 63),
+            I64Vec2::new(4, 68),
+            I64Vec2::new(77, 8),
+            I64Vec2::new(52, 100),
+            I64Vec2::new(19, 12),
+        ]];
+
+        let union_vertices = union(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
+        println!("{:?}", union_vertices);
+
+        chart.draw_series(std::iter::once(Polygon::new(
+            ivec_to_cartesian(union_vertices[0].clone()),
+            RGBColor(255, 0, 255),
+        )));
+
+        root.present().unwrap();
+    }
+
+    #[test]
+    fn plot_difference() {
+        let root = BitMapBackend::new("difference_test.png", (256, 256)).into_drawing_area();
+
+        root.fill(&WHITE);
+
+        let mut chart = ChartBuilder::on(&root)
+            .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
+
+        let subj_vertices = vec![vec![
+            I64Vec2::new(100, 50),
+            I64Vec2::new(10, 79),
+            I64Vec2::new(65, 2),
+            I64Vec2::new(65, 98),
+            I64Vec2::new(10, 21),
+        ]];
+
+        let clip_vertices = vec![vec![
+            I64Vec2::new(98, 63),
+            I64Vec2::new(4, 68),
+            I64Vec2::new(77, 8),
+            I64Vec2::new(52, 100),
+            I64Vec2::new(19, 12),
+        ]];
+
+        let difference_vertices = difference(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
+        println!("{:?}", difference_vertices);
+
+        for path in difference_vertices {
+            chart.draw_series(std::iter::once(Polygon::new(
+                ivec_to_cartesian(path.clone()),
+                RGBColor(255, 0, 255),
+            )));
+        }
+
+        root.present().unwrap();
+    }
+
+    #[test]
+    fn plot_xor() {
+        let root = BitMapBackend::new("xor_test.png", (256, 256)).into_drawing_area();
+
+        root.fill(&WHITE);
+
+        let mut chart = ChartBuilder::on(&root)
+            .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
+
+        let subj_vertices = vec![vec![
+            I64Vec2::new(100, 50),
+            I64Vec2::new(10, 79),
+            I64Vec2::new(65, 2),
+            I64Vec2::new(65, 98),
+            I64Vec2::new(10, 21),
+        ]];
+
+        let clip_vertices = vec![vec![
+            I64Vec2::new(98, 63),
+            I64Vec2::new(4, 68),
+            I64Vec2::new(77, 8),
+            I64Vec2::new(52, 100),
+            I64Vec2::new(19, 12),
+        ]];
+
+        let xor_vertices = xor(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
+        println!("{:?}", xor_vertices);
+
+        for path in xor_vertices {
+            chart.draw_series(std::iter::once(Polygon::new(
+                ivec_to_cartesian(path.clone()),
+                RGBColor(255, 0, 255),
+            )));
+        }
+
+        root.present().unwrap();
     }
 }
