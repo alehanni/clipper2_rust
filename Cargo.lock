@@ -92,6 +92,7 @@ dependencies = [
 name = "clipper2_rust"
 version = "0.1.0"
 dependencies = [
+ "cc",
  "cmake",
  "glam",
  "libc",
