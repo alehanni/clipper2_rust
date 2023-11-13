@@ -1,11 +1,13 @@
 #![allow(unused_must_use, dead_code)]
-use libc::{c_long, size_t};
+use ffi::InflatePaths64;
+use libc::{c_long, size_t, c_double};
 use std::vec::Vec;
 
 mod ffi {
     use libc::{c_int, c_long, c_double, c_char};
 
     pub type CPaths64 = *const c_long;
+    pub type CPaths64Mut = *mut c_long;
     pub type CPaths64Ref = *mut *mut c_long;
 
     #[repr(C)]
@@ -39,7 +41,7 @@ mod ffi {
             miter_limit: c_double,
             arc_tolerance: c_double,
             reverse_solution: bool,
-        ) -> CPaths64;
+        ) -> CPaths64Mut;
 
         pub fn RectClip64(
             rect: &CRect64,
@@ -67,6 +69,20 @@ pub enum FillRule {
     NonZero,
     Positive,
     Negative,
+}
+
+pub enum JoinType {
+    Square,
+    Round,
+    Miter,
+}
+
+pub enum EndType {
+    Polygon,
+    Joined,
+    Butt,
+    Square,
+    Round,
 }
 
 // NOTE:
@@ -155,9 +171,16 @@ where
     return paths64;
 }
 
-fn boolean_op<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule, cliptype: ClipType) -> Vec<Vec<T>>
+pub fn boolean_op<T>(
+    subjects: Vec<Vec<T>>,
+    clips: Vec<Vec<T>>,
+    fillrule: FillRule,
+    cliptype: ClipType,
+    preserve_collinear: bool,
+    reverse_solution: bool,
+) -> Vec<Vec<T>>
 where
-    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy + std::fmt::Debug,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
     let subj_buffer = cpaths_from_vec(subjects);
     let clip_buffer = cpaths_from_vec(clips);
@@ -173,8 +196,8 @@ where
             clip_buffer.as_ptr(),
             sol_buffer,
             sol_open_buffer, // unused, but should point to an empty CPaths64 that needs freeing
-            true,
-            false,
+            preserve_collinear,
+            reverse_solution,
         );
     }
 
@@ -196,42 +219,78 @@ where
 
 pub fn intersect<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
-    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy + std::fmt::Debug,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    boolean_op(subjects, clips, fillrule, ClipType::Intersection)
+    boolean_op(subjects, clips, fillrule, ClipType::Intersection, true, false)
 }
 
 pub fn union<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
-    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy + std::fmt::Debug,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    boolean_op(subjects, clips, fillrule, ClipType::Union)
+    boolean_op(subjects, clips, fillrule, ClipType::Union, true, false)
 }
 
 pub fn difference<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
-    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy + std::fmt::Debug,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    boolean_op(subjects, clips, fillrule, ClipType::Difference)
+    boolean_op(subjects, clips, fillrule, ClipType::Difference, true, false)
 }
 
 pub fn xor<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
-    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy + std::fmt::Debug,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    boolean_op(subjects, clips, fillrule, ClipType::Xor)
+    boolean_op(subjects, clips, fillrule, ClipType::Xor, true, false)
+}
+
+pub fn inflate_paths<T>(
+    paths: Vec<Vec<T>>,
+    delta: f64,
+    jointype: JoinType,
+    endtype: EndType,
+    miter_limit: f64,
+    arc_tolerance: f64,
+    reverse_solution: bool
+) -> Vec<Vec<T>>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let input_buffer = cpaths_from_vec(paths);
+    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
+
+    unsafe {
+        *result_buffer = InflatePaths64(
+            input_buffer.as_ptr(),
+            delta as c_double,
+            jointype as u8,
+            endtype as u8,
+            miter_limit as c_double,
+            arc_tolerance as c_double,
+            reverse_solution,
+        )
+    };
+
+    let buffer_len = unsafe { **result_buffer } as size_t;
+    let cpaths_buffer = unsafe { Vec::from_raw_parts(*result_buffer, buffer_len, buffer_len) };
+
+    let result = vec_from_cpaths::<T>(&cpaths_buffer);
+    
+    std::mem::forget(cpaths_buffer);
+    unsafe { ffi::DisposeExportedCPaths64(result_buffer); }
+
+    return result;
 }
 
 #[cfg(test)]
 mod tests {
 
-    use crate::{intersect, union, difference, xor};
-    use crate::FillRule;
+    use crate::{intersect, inflate_paths, FillRule, JoinType, EndType};
     use glam::I64Vec2;
-    use plotters::prelude::*;
 
     #[test]
-    fn basic_test() {
+    fn boolean_op_test() {
         let box1_subj = vec![vec![
             I64Vec2::new(48, 48),
             I64Vec2::new(48, -16),
@@ -247,158 +306,19 @@ mod tests {
         ]];
 
         let res = intersect(box1_subj, box2_clip, FillRule::EvenOdd);
-        //println!("res: {:?}", res);
-    }
-
-    fn ivec_to_cartesian(input: Vec<I64Vec2>) -> Vec<(f64, f64)> {
-        input.into_iter().map(|x| x.as_dvec2().into()).collect()
+        assert_eq!(res, [[I64Vec2::new(16, -16), I64Vec2::new(16, 16), I64Vec2::new(-16, 16), I64Vec2::new(-16, -16)]]);
     }
 
     #[test]
-    fn plot_intersection() {
-        let root = BitMapBackend::new("intersection_test.png", (256, 256)).into_drawing_area();
-
-        root.fill(&WHITE);
-
-        let mut chart = ChartBuilder::on(&root)
-            .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
-
-        let subj_vertices = vec![vec![
-            I64Vec2::new(100, 50),
-            I64Vec2::new(10, 79),
-            I64Vec2::new(65, 2),
-            I64Vec2::new(65, 98),
-            I64Vec2::new(10, 21),
+    fn inflate_paths_test() {
+        let paths = vec![vec![
+            I64Vec2::new(100, 100),
+            I64Vec2::new(1500, 100),
+            I64Vec2::new(100, 1500),
+            I64Vec2::new(1500, 1500),
         ]];
 
-        let clip_vertices = vec![vec![
-            I64Vec2::new(98, 63),
-            I64Vec2::new(4, 68),
-            I64Vec2::new(77, 8),
-            I64Vec2::new(52, 100),
-            I64Vec2::new(19, 12),
-        ]];
-
-        let intersection_vertices = intersect(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
-        println!("{:?}", intersection_vertices);
-
-        chart.draw_series(std::iter::once(Polygon::new(
-            ivec_to_cartesian(intersection_vertices[0].clone()),
-            RGBColor(255, 0, 255),
-        )));
-
-        root.present().unwrap();
-    }
-
-    #[test]
-    fn plot_union() {
-        let root = BitMapBackend::new("union_test.png", (256, 256)).into_drawing_area();
-
-        root.fill(&WHITE);
-
-        let mut chart = ChartBuilder::on(&root)
-            .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
-
-        let subj_vertices = vec![vec![
-            I64Vec2::new(100, 50),
-            I64Vec2::new(10, 79),
-            I64Vec2::new(65, 2),
-            I64Vec2::new(65, 98),
-            I64Vec2::new(10, 21),
-        ]];
-
-        let clip_vertices = vec![vec![
-            I64Vec2::new(98, 63),
-            I64Vec2::new(4, 68),
-            I64Vec2::new(77, 8),
-            I64Vec2::new(52, 100),
-            I64Vec2::new(19, 12),
-        ]];
-
-        let union_vertices = union(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
-        println!("{:?}", union_vertices);
-
-        chart.draw_series(std::iter::once(Polygon::new(
-            ivec_to_cartesian(union_vertices[0].clone()),
-            RGBColor(255, 0, 255),
-        )));
-
-        root.present().unwrap();
-    }
-
-    #[test]
-    fn plot_difference() {
-        let root = BitMapBackend::new("difference_test.png", (256, 256)).into_drawing_area();
-
-        root.fill(&WHITE);
-
-        let mut chart = ChartBuilder::on(&root)
-            .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
-
-        let subj_vertices = vec![vec![
-            I64Vec2::new(100, 50),
-            I64Vec2::new(10, 79),
-            I64Vec2::new(65, 2),
-            I64Vec2::new(65, 98),
-            I64Vec2::new(10, 21),
-        ]];
-
-        let clip_vertices = vec![vec![
-            I64Vec2::new(98, 63),
-            I64Vec2::new(4, 68),
-            I64Vec2::new(77, 8),
-            I64Vec2::new(52, 100),
-            I64Vec2::new(19, 12),
-        ]];
-
-        let difference_vertices = difference(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
-        println!("{:?}", difference_vertices);
-
-        for path in difference_vertices {
-            chart.draw_series(std::iter::once(Polygon::new(
-                ivec_to_cartesian(path.clone()),
-                RGBColor(255, 0, 255),
-            )));
-        }
-
-        root.present().unwrap();
-    }
-
-    #[test]
-    fn plot_xor() {
-        let root = BitMapBackend::new("xor_test.png", (256, 256)).into_drawing_area();
-
-        root.fill(&WHITE);
-
-        let mut chart = ChartBuilder::on(&root)
-            .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
-
-        let subj_vertices = vec![vec![
-            I64Vec2::new(100, 50),
-            I64Vec2::new(10, 79),
-            I64Vec2::new(65, 2),
-            I64Vec2::new(65, 98),
-            I64Vec2::new(10, 21),
-        ]];
-
-        let clip_vertices = vec![vec![
-            I64Vec2::new(98, 63),
-            I64Vec2::new(4, 68),
-            I64Vec2::new(77, 8),
-            I64Vec2::new(52, 100),
-            I64Vec2::new(19, 12),
-        ]];
-
-        let xor_vertices = xor(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
-        println!("{:?}", xor_vertices);
-
-        for path in xor_vertices {
-            chart.draw_series(std::iter::once(Polygon::new(
-                ivec_to_cartesian(path.clone()),
-                RGBColor(255, 0, 255),
-            )));
-        }
-
-        root.present().unwrap();
+        let res = inflate_paths(paths, 200.0, JoinType::Miter, EndType::Square, 2.0, 0.0, false);
+        println!("{:?}", res);
     }
 }
