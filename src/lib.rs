@@ -2,6 +2,7 @@
 use ffi::InflatePaths64;
 use libc::{c_long, size_t, c_double};
 use std::vec::Vec;
+use thiserror::Error;
 
 mod ffi {
     use libc::{c_int, c_long, c_double, c_char};
@@ -121,7 +122,7 @@ where
 
     let mut cpaths_buffer = vec![0 as c_long; buffer_len];
 
-    // fill buffer with data
+    // fill buffer with appropriate data
     cpaths_buffer[0] = buffer_len as i64;
     cpaths_buffer[1] = n_paths as i64;
     
@@ -158,7 +159,7 @@ where
         debug_assert_eq!(0, *cpaths_iter.next().unwrap()); // this should always be 0
 
         let mut path = Vec::<T>::with_capacity(2*path_len as size_t);
-        for _ in 0..path_len { // change when https://github.com/rust-lang/rust/issues/98326 has been closed
+        for _ in 0..path_len { // change when https://github.com/rust-lang/rust/issues/98326 has been closed?
             let point = [
                 *cpaths_iter.next().unwrap(), // x
                 *cpaths_iter.next().unwrap(), // y
@@ -171,6 +172,18 @@ where
     return paths64;
 }
 
+#[derive(Error, Debug)]
+pub enum BooleanOpError {
+    #[error("argument \"cliptype\" is not a valid ClipType enum")]
+    InvalidClipType,
+    #[error("argument \"fillrule\" is not a valid FillRule enum")]
+    InvalidFillRule,
+    #[error("clipper encountered an error during execute")]
+    ClipperExecuteError,
+    #[error("unknown clipper error")]
+    Unknown,
+}
+
 pub fn boolean_op<T>(
     subjects: Vec<Vec<T>>,
     clips: Vec<Vec<T>>,
@@ -178,7 +191,7 @@ pub fn boolean_op<T>(
     cliptype: ClipType,
     preserve_collinear: bool,
     reverse_solution: bool,
-) -> Vec<Vec<T>>
+) -> Result<Vec<Vec<T>>, BooleanOpError>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
@@ -187,7 +200,7 @@ where
     let sol_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();      // set to point to allocated memory by the foreign function
     let sol_open_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut(); //
 
-    unsafe {
+    let errcode = unsafe {
         ffi::BooleanOp64(
             cliptype as u8,
             fillrule as u8,
@@ -198,7 +211,17 @@ where
             sol_open_buffer, // unused, but should point to an empty CPaths64 that needs freeing
             preserve_collinear,
             reverse_solution,
-        );
+        )
+    };
+
+    if errcode != 0 {
+        // sol(_open)_buffer shouldn't point to anything and thus don't require clean up
+        match errcode {
+            -4 => return Err(BooleanOpError::InvalidClipType),
+            -3 => return Err(BooleanOpError::InvalidFillRule),
+            -1 => return Err(BooleanOpError::ClipperExecuteError),
+            _ => return Err(BooleanOpError::Unknown),
+        }
     }
 
     // sol_buffer and sol_open_buffer are set by BooleanOp64 to point to the result
@@ -214,35 +237,47 @@ where
         ffi::DisposeExportedCPaths64(sol_open_buffer);
     }
 
-    return solution;
+    return Ok(solution);
 }
 
 pub fn intersect<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    boolean_op(subjects, clips, fillrule, ClipType::Intersection, true, false)
+    match boolean_op(subjects, clips, fillrule, ClipType::Intersection, true, false) {
+        Ok(res) => res,
+        Err(e) => panic!("intersect returned an error: {}", e),
+    }
 }
 
 pub fn union<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    boolean_op(subjects, clips, fillrule, ClipType::Union, true, false)
+    match boolean_op(subjects, clips, fillrule, ClipType::Union, true, false) {
+        Ok(res) => res,
+        Err(e) => panic!("union returned an error: {}", e),
+    }
 }
 
 pub fn difference<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    boolean_op(subjects, clips, fillrule, ClipType::Difference, true, false)
+    match boolean_op(subjects, clips, fillrule, ClipType::Difference, true, false) {
+        Ok(res) => res,
+        Err(e) => panic!("difference returned an error: {}", e),
+    }
 }
 
 pub fn xor<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    boolean_op(subjects, clips, fillrule, ClipType::Xor, true, false)
+    match boolean_op(subjects, clips, fillrule, ClipType::Xor, true, false) {
+        Ok(res) => res,
+        Err(e) => panic!("xor returned an error: {}", e),
+    }
 }
 
 pub fn inflate_paths<T>(
@@ -286,7 +321,7 @@ where
 #[cfg(test)]
 mod tests {
 
-    use crate::{intersect, inflate_paths, FillRule, JoinType, EndType};
+    use crate::{boolean_op, intersect, inflate_paths, ClipType, FillRule, JoinType, EndType};
     use glam::I64Vec2;
 
     #[test]
@@ -319,6 +354,56 @@ mod tests {
         ]];
 
         let res = inflate_paths(paths, 200.0, JoinType::Miter, EndType::Square, 2.0, 0.0, false);
-        println!("{:?}", res);
+        // TODO: run simplify on the paths
+        assert_eq!(res, [[
+            I64Vec2::new(1520, 2),
+            I64Vec2::new(1539, 8),
+            I64Vec2::new(1557, 18),
+            I64Vec2::new(1572, 30),
+            I64Vec2::new(1584, 46),
+            I64Vec2::new(1593, 64),
+            I64Vec2::new(1599, 83),
+            I64Vec2::new(1600, 103),
+            I64Vec2::new(1597, 123),
+            I64Vec2::new(1591, 142),
+            I64Vec2::new(1581, 159),
+            I64Vec2::new(1571, 171),
+            I64Vec2::new(342, 1400),
+            I64Vec2::new(1600, 1400),
+            I64Vec2::new(1600, 1600),
+            I64Vec2::new(100, 1600),
+            I64Vec2::new(80, 1598),
+            I64Vec2::new(61, 1592),
+            I64Vec2::new(43, 1582),
+            I64Vec2::new(28, 1570),
+            I64Vec2::new(16, 1554),
+            I64Vec2::new(7, 1536),
+            I64Vec2::new(1, 1517),
+            I64Vec2::new(0, 1497),
+            I64Vec2::new(3, 1477),
+            I64Vec2::new(9, 1458),
+            I64Vec2::new(19, 1441),
+            I64Vec2::new(29, 1429),
+            I64Vec2::new(1258, 200),
+            I64Vec2::new(0, 200),
+            I64Vec2::new(0, 0),
+            I64Vec2::new(1500, 0)
+        ]]);
+    }
+
+    #[test]
+    fn invalid_cliptype_test() {
+        let box1_subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
+        let box2_clip = vec![vec![I64Vec2::new(-48, -48), I64Vec2::new(-48, 16), I64Vec2::new(16, 16), I64Vec2::new(16, -48)]];
+        let invalid_cliptype: ClipType  = unsafe { std::mem::transmute(100 as u8) };
+        assert!(boolean_op(box1_subj, box2_clip, FillRule::EvenOdd, invalid_cliptype, true, false).is_err());
+    }
+
+    #[test]
+    fn invalid_fillrule_test() {
+        let box1_subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
+        let box2_clip = vec![vec![I64Vec2::new(-48, -48), I64Vec2::new(-48, 16), I64Vec2::new(16, 16), I64Vec2::new(16, -48)]];
+        let invalid_fillrule: FillRule  = unsafe { std::mem::transmute(100 as u8) };
+        assert!(boolean_op(box1_subj, box2_clip, invalid_fillrule, ClipType::Intersection, true, false).is_err());
     }
 }
