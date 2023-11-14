@@ -117,7 +117,7 @@ pub enum EndType {
 // but rather represent the paths packed one after the other 
 // in a single contiguous int64_t array
 
-fn cpaths_from_vec<T>(paths: Vec<Vec<T>>) -> Vec<c_long>
+fn cpaths_from_vec<T>(paths: &Vec<Vec<T>>) -> Vec<c_long>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
@@ -138,7 +138,7 @@ where
         i += 2;
 
         for coord in path {
-            let coord: [c_long; 2] = coord.into();
+            let coord: [c_long; 2] = (*coord).into();
             cpaths_buffer[i] = coord[0];
             cpaths_buffer[i+1] = coord[1];
             i += 2;
@@ -190,8 +190,8 @@ pub enum BooleanOpError {
 }
 
 pub fn boolean_op<T>(
-    subjects: Vec<Vec<T>>,
-    clips: Vec<Vec<T>>,
+    subjects: &Vec<Vec<T>>,
+    clips: &Vec<Vec<T>>,
     fillrule: FillRule,
     cliptype: ClipType,
     preserve_collinear: bool,
@@ -245,7 +245,7 @@ where
     return Ok(solution);
 }
 
-pub fn intersect<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
+pub fn intersect<T>(subjects: &Vec<Vec<T>>, clips: &Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
@@ -255,7 +255,7 @@ where
     }
 }
 
-pub fn union<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
+pub fn union<T>(subjects: &Vec<Vec<T>>, clips: &Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
@@ -265,7 +265,7 @@ where
     }
 }
 
-pub fn difference<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
+pub fn difference<T>(subjects: &Vec<Vec<T>>, clips: &Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
@@ -275,7 +275,7 @@ where
     }
 }
 
-pub fn xor<T>(subjects: Vec<Vec<T>>, clips: Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
+pub fn xor<T>(subjects: &Vec<Vec<T>>, clips: &Vec<Vec<T>>, fillrule: FillRule) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
@@ -286,7 +286,7 @@ where
 }
 
 pub fn inflate_paths<T>(
-    paths: Vec<Vec<T>>,
+    paths: &Vec<Vec<T>>,
     delta: f64,
     jointype: JoinType,
     endtype: EndType,
@@ -323,7 +323,7 @@ where
     return result;
 }
 
-pub fn simplify_paths<T>(paths: Vec<Vec<T>>, epsilon: f64) -> Vec<Vec<T>>
+pub fn simplify_paths<T>(paths: &Vec<Vec<T>>, epsilon: f64) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
@@ -371,7 +371,7 @@ mod tests {
             I64Vec2::new(16, -48),
         ]];
 
-        let res = intersect(box1_subj, box2_clip, FillRule::EvenOdd);
+        let res = intersect(&box1_subj, &box2_clip, FillRule::EvenOdd);
         assert_eq!(res, [[I64Vec2::new(16, -16), I64Vec2::new(16, 16), I64Vec2::new(-16, 16), I64Vec2::new(-16, -16)]]);
     }
 
@@ -384,8 +384,8 @@ mod tests {
             I64Vec2::new(1500, 1500),
         ]];
 
-        let mut res = inflate_paths(paths, 200.0, JoinType::Miter, EndType::Square, 2.0, 0.0, false);
-        res = simplify_paths(res, 100.0);
+        let mut res = inflate_paths(&paths, 200.0, JoinType::Miter, EndType::Square, 2.0, 0.0, false);
+        res = simplify_paths(&res, 100.0);
         assert_eq!(res[0].len(), 10);
     }
 
@@ -394,7 +394,7 @@ mod tests {
         let box1_subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
         let box2_clip = vec![vec![I64Vec2::new(-48, -48), I64Vec2::new(-48, 16), I64Vec2::new(16, 16), I64Vec2::new(16, -48)]];
         let invalid_cliptype: ClipType  = unsafe { std::mem::transmute(100 as u8) };
-        assert!(boolean_op(box1_subj, box2_clip, FillRule::EvenOdd, invalid_cliptype, true, false).is_err());
+        assert!(boolean_op(&box1_subj, &box2_clip, FillRule::EvenOdd, invalid_cliptype, true, false).is_err());
     }
 
     #[test]
@@ -402,6 +402,6 @@ mod tests {
         let box1_subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
         let box2_clip = vec![vec![I64Vec2::new(-48, -48), I64Vec2::new(-48, 16), I64Vec2::new(16, 16), I64Vec2::new(16, -48)]];
         let invalid_fillrule: FillRule  = unsafe { std::mem::transmute(100 as u8) };
-        assert!(boolean_op(box1_subj, box2_clip, invalid_fillrule, ClipType::Intersection, true, false).is_err());
+        assert!(boolean_op(&box1_subj, &box2_clip, invalid_fillrule, ClipType::Intersection, true, false).is_err());
     }
 }

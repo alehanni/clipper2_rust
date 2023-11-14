@@ -34,7 +34,7 @@ fn plot_intersection() {
         I64Vec2::new(19, 12),
     ]];
 
-    let intersection_vertices = intersect(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
+    let intersection_vertices = intersect(&subj_vertices, &clip_vertices, FillRule::NonZero);
     println!("{:?}", intersection_vertices);
 
     chart.draw_series(std::iter::once(Polygon::new(
@@ -70,7 +70,7 @@ fn plot_union() {
         I64Vec2::new(19, 12),
     ]];
 
-    let union_vertices = union(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
+    let union_vertices = union(&subj_vertices, &clip_vertices, FillRule::NonZero);
     println!("{:?}", union_vertices);
 
     chart.draw_series(std::iter::once(Polygon::new(
@@ -106,7 +106,7 @@ fn plot_difference() {
         I64Vec2::new(19, 12),
     ]];
 
-    let difference_vertices = difference(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
+    let difference_vertices = difference(&subj_vertices, &clip_vertices, FillRule::NonZero);
     println!("{:?}", difference_vertices);
 
     for path in difference_vertices {
@@ -144,7 +144,7 @@ fn plot_xor() {
         I64Vec2::new(19, 12),
     ]];
 
-    let xor_vertices = xor(subj_vertices.clone(), clip_vertices.clone(), FillRule::NonZero);
+    let xor_vertices = xor(&subj_vertices, &clip_vertices, FillRule::NonZero);
     println!("{:?}", xor_vertices);
 
     for path in xor_vertices {
@@ -180,8 +180,8 @@ fn plot_offset_path() {
     let mut p: Vec<Vec<I64Vec2>> = bunny_vertices.clone();
     let mut solution: Vec<Vec<I64Vec2>> = vec![];
     loop {
-        p = inflate_paths(p, -2.5, JoinType::Round, EndType::Polygon, 2.0, 0.0, false);
-        p = simplify_paths(p, 0.025);
+        p = inflate_paths(&p, -2.5, JoinType::Round, EndType::Polygon, 2.0, 0.0, false);
+        p = simplify_paths(&p, 0.025);
 
         if p.is_empty() {
             break;
