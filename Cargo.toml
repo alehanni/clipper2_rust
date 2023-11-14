@@ -16,3 +16,5 @@ thiserror = "1.0"
 [dev-dependencies]
 plotters = "0.3.3"
 glam = "0.24"
+regex = "1.10.2"
+svg-path-parser = "0.1.1"

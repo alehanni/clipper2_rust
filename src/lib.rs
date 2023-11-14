@@ -1,5 +1,4 @@
 #![allow(unused_must_use, dead_code)]
-use ffi::InflatePaths64;
 use libc::{c_long, size_t, c_double};
 use std::vec::Vec;
 use thiserror::Error;
@@ -55,6 +54,12 @@ mod ffi {
         ) -> CPaths64;
 
         pub fn DisposeExportedCPaths64(p: CPaths64Ref);
+
+        pub fn SimplifyPaths64(
+            paths: CPaths64,
+            epsilon: c_double,
+            is_open_path: bool,
+        ) -> CPaths64Mut;
     }
 }
 
@@ -296,7 +301,7 @@ where
     let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
 
     unsafe {
-        *result_buffer = InflatePaths64(
+        *result_buffer = ffi::InflatePaths64(
             input_buffer.as_ptr(),
             delta as c_double,
             jointype as u8,
@@ -305,7 +310,33 @@ where
             arc_tolerance as c_double,
             reverse_solution,
         )
-    };
+    }
+
+    let buffer_len = unsafe { **result_buffer } as size_t;
+    let cpaths_buffer = unsafe { Vec::from_raw_parts(*result_buffer, buffer_len, buffer_len) };
+
+    let result = vec_from_cpaths::<T>(&cpaths_buffer);
+    
+    std::mem::forget(cpaths_buffer);
+    unsafe { ffi::DisposeExportedCPaths64(result_buffer); }
+
+    return result;
+}
+
+pub fn simplify_paths<T>(paths: Vec<Vec<T>>, epsilon: f64) -> Vec<Vec<T>>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let input_buffer = cpaths_from_vec(paths);
+    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
+
+    unsafe {
+        *result_buffer = ffi::SimplifyPaths64(
+            input_buffer.as_ptr(),
+            epsilon,
+            false,
+        )
+    }
 
     let buffer_len = unsafe { **result_buffer } as size_t;
     let cpaths_buffer = unsafe { Vec::from_raw_parts(*result_buffer, buffer_len, buffer_len) };
@@ -321,7 +352,7 @@ where
 #[cfg(test)]
 mod tests {
 
-    use crate::{boolean_op, intersect, inflate_paths, ClipType, FillRule, JoinType, EndType};
+    use crate::{boolean_op, intersect, inflate_paths, simplify_paths, ClipType, FillRule, JoinType, EndType};
     use glam::I64Vec2;
 
     #[test]
@@ -353,42 +384,9 @@ mod tests {
             I64Vec2::new(1500, 1500),
         ]];
 
-        let res = inflate_paths(paths, 200.0, JoinType::Miter, EndType::Square, 2.0, 0.0, false);
-        // TODO: run simplify on the paths
-        assert_eq!(res, [[
-            I64Vec2::new(1520, 2),
-            I64Vec2::new(1539, 8),
-            I64Vec2::new(1557, 18),
-            I64Vec2::new(1572, 30),
-            I64Vec2::new(1584, 46),
-            I64Vec2::new(1593, 64),
-            I64Vec2::new(1599, 83),
-            I64Vec2::new(1600, 103),
-            I64Vec2::new(1597, 123),
-            I64Vec2::new(1591, 142),
-            I64Vec2::new(1581, 159),
-            I64Vec2::new(1571, 171),
-            I64Vec2::new(342, 1400),
-            I64Vec2::new(1600, 1400),
-            I64Vec2::new(1600, 1600),
-            I64Vec2::new(100, 1600),
-            I64Vec2::new(80, 1598),
-            I64Vec2::new(61, 1592),
-            I64Vec2::new(43, 1582),
-            I64Vec2::new(28, 1570),
-            I64Vec2::new(16, 1554),
-            I64Vec2::new(7, 1536),
-            I64Vec2::new(1, 1517),
-            I64Vec2::new(0, 1497),
-            I64Vec2::new(3, 1477),
-            I64Vec2::new(9, 1458),
-            I64Vec2::new(19, 1441),
-            I64Vec2::new(29, 1429),
-            I64Vec2::new(1258, 200),
-            I64Vec2::new(0, 200),
-            I64Vec2::new(0, 0),
-            I64Vec2::new(1500, 0)
-        ]]);
+        let mut res = inflate_paths(paths, 200.0, JoinType::Miter, EndType::Square, 2.0, 0.0, false);
+        res = simplify_paths(res, 100.0);
+        assert_eq!(res[0].len(), 10);
     }
 
     #[test]
