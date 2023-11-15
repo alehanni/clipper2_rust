@@ -1,9 +1,13 @@
-use clipper2_rust::{intersect, union, difference, xor, inflate_paths, simplify_paths, JoinType, EndType};
-use clipper2_rust::FillRule;
+use std::f64::consts::PI;
+use clipper2_rust::*;
 use glam::{I64Vec2, DVec2};
 use plotters::prelude::*;
+use rand_xoshiro::Xoshiro256StarStar;
+use rand_xoshiro::rand_core::SeedableRng;
+use rand::distributions::{Distribution, Uniform};
 use regex::Regex;
 use svg_path_parser;
+
 
 fn ivec_to_cartesian(input: Vec<I64Vec2>) -> Vec<(f64, f64)> {
     input.into_iter().map(|x| x.as_dvec2().into()).collect()
@@ -83,13 +87,6 @@ fn plot_union() {
 
 #[test]
 fn plot_difference() {
-    let root = SVGBackend::new("test_plots/2_difference_test.svg", (500, 500)).into_drawing_area();
-
-    root.fill(&TRANSPARENT).unwrap();
-
-    let mut chart = ChartBuilder::on(&root)
-        .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
-
     let subj_vertices = vec![vec![
         I64Vec2::new(100, 50),
         I64Vec2::new(10, 79),
@@ -107,7 +104,13 @@ fn plot_difference() {
     ]];
 
     let difference_vertices = difference(&subj_vertices, &clip_vertices, FillRule::NonZero);
-    println!("{:?}", difference_vertices);
+
+    // draw solution
+    let root = SVGBackend::new("test_plots/2_difference_test.svg", (500, 500)).into_drawing_area();
+    root.fill(&TRANSPARENT).unwrap();
+    
+    let mut chart = ChartBuilder::on(&root)
+        .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
 
     for path in difference_vertices {
         chart.draw_series(std::iter::once(Polygon::new(
@@ -121,13 +124,6 @@ fn plot_difference() {
 
 #[test]
 fn plot_xor() {
-    let root = SVGBackend::new("test_plots/3_xor_test.svg", (500, 500)).into_drawing_area();
-
-    root.fill(&TRANSPARENT).unwrap();
-
-    let mut chart = ChartBuilder::on(&root)
-        .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
-
     let subj_vertices = vec![vec![
         I64Vec2::new(100, 50),
         I64Vec2::new(10, 79),
@@ -145,7 +141,13 @@ fn plot_xor() {
     ]];
 
     let xor_vertices = xor(&subj_vertices, &clip_vertices, FillRule::NonZero);
-    println!("{:?}", xor_vertices);
+
+    // draw solution
+    let root = SVGBackend::new("test_plots/3_xor_test.svg", (500, 500)).into_drawing_area();
+    root.fill(&TRANSPARENT).unwrap();
+
+    let mut chart = ChartBuilder::on(&root)
+        .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
 
     for path in xor_vertices {
         chart.draw_series(std::iter::once(Polygon::new(
@@ -180,7 +182,7 @@ fn plot_offset_path() {
     let mut p: Vec<Vec<I64Vec2>> = bunny_vertices.clone();
     let mut solution: Vec<Vec<I64Vec2>> = vec![];
     loop {
-        p = inflate_paths(&p, -2.5, JoinType::Round, EndType::Polygon, 2.0, 0.0, false);
+        p = inflate_paths(&p, -2.5, JoinType::Round, EndType::Polygon);
         p = simplify_paths(&p, 0.025);
 
         if p.is_empty() {
@@ -192,7 +194,6 @@ fn plot_offset_path() {
 
     // draw solution
     let root = SVGBackend::new("test_plots/4_offset_bunny.svg", (500, 500)).into_drawing_area();
-
     root.fill(&TRANSPARENT).unwrap();
 
     let mut chart = ChartBuilder::on(&root)
@@ -207,6 +208,56 @@ fn plot_offset_path() {
                 0.9,
                 0.5,
             ),
+        ))).unwrap();
+    }
+
+    root.present().unwrap();
+}
+
+#[test]
+fn plot_rect_clip() {
+    let mut rng = Xoshiro256StarStar::seed_from_u64(0xC0FFEE);
+    let distr = Uniform::from(50..450);
+
+    let radius = 50.0;
+    let n_points = 32;
+    let circle_x = |i| radius * (i as f64/n_points as f64 * 2.0*PI).cos();
+    let circle_y = |i| radius * (i as f64/n_points as f64 * 2.0*PI).sin();
+
+    let circle_vertices: Vec<Vec<I64Vec2>> = vec![(0..n_points).map(|i| I64Vec2::new(circle_x(i) as i64, circle_y(i) as i64)).collect()];
+
+    // generate pseudo-random circles
+    let mut rand_circle_vertices: Vec<Vec<I64Vec2>> = vec![];
+    for _ in 0..30 {
+        let mut c = circle_vertices[0].clone();
+        let offx = distr.sample(&mut rng);
+        let offy = distr.sample(&mut rng);
+        c = c.iter().map(|v| *v + I64Vec2::new(offx, offy)).collect();
+        rand_circle_vertices.push(c);
+    }
+
+    // clip with rect_clip
+    let rect = [100, 100, 400, 400];
+    let clipped_vertices = rect_clip(&rect, &rand_circle_vertices);
+
+    // draw solution
+    let root = SVGBackend::new("test_plots/5_rect_clip.svg", (500, 500)).into_drawing_area();
+    root.fill(&TRANSPARENT).unwrap();
+
+    let mut chart = ChartBuilder::on(&root)
+        .build_cartesian_2d(0.0..500.0, 0.0..500.0).unwrap();
+
+    for path in rand_circle_vertices {
+        chart.draw_series(std::iter::once(Polygon::new(
+            ivec_to_cartesian(path.clone()),
+            RGBColor(128, 128, 128),
+        ))).unwrap();
+    }
+
+    for path in clipped_vertices {
+        chart.draw_series(std::iter::once(Polygon::new(
+            ivec_to_cartesian(path.clone()),
+            RGBColor(255, 0, 255),
         ))).unwrap();
     }
 

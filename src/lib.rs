@@ -1,6 +1,6 @@
 #![allow(unused_must_use, dead_code)]
 use libc::{c_long, size_t, c_double};
-use std::vec::Vec;
+use std::{vec::Vec, result};
 use thiserror::Error;
 
 mod ffi {
@@ -12,10 +12,22 @@ mod ffi {
 
     #[repr(C)]
     pub struct CRect64{
-        left: c_long,
-        top: c_long,
-        right: c_long,
-        bottom: c_long,
+        pub left: c_long,
+        pub top: c_long,
+        pub right: c_long,
+        pub bottom: c_long,
+    }
+
+    impl From<[i64; 4]> for CRect64 {
+        fn from(slice: [i64; 4]) -> CRect64 {
+            CRect64 { left: slice[0], top: slice[1], right: slice[2], bottom: slice[3] }
+        }
+    }
+
+    impl From<(i64, i64, i64, i64)> for CRect64 {
+        fn from(tup: (i64, i64, i64, i64)) -> CRect64 {
+            CRect64 { left: tup.0, top: tup.1, right: tup.2, bottom: tup.3 }
+        }
     }
 
     extern "C" {
@@ -44,14 +56,14 @@ mod ffi {
         ) -> CPaths64Mut;
 
         pub fn RectClip64(
-            rect: &CRect64,
+            rect: *const CRect64,
             paths: CPaths64,
-        ) -> CPaths64;
+        ) -> CPaths64Mut;
 
         pub fn RectClipLines64(
-            rect: &CRect64,
+            rect: *const CRect64,
             paths: CPaths64,
-        ) -> CPaths64;
+        ) -> CPaths64Mut;
 
         pub fn DisposeExportedCPaths64(p: CPaths64Ref);
 
@@ -177,6 +189,21 @@ where
     return paths64;
 }
 
+unsafe fn vec_from_raw_cpaths<T>(cpaths_ptr: *mut *mut c_long) -> Vec<Vec<T>>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let buffer_len = **cpaths_ptr as size_t;
+    let cpaths_buffer = Vec::from_raw_parts(*cpaths_ptr, buffer_len, buffer_len);
+
+    let result = vec_from_cpaths::<T>(&cpaths_buffer);
+    
+    std::mem::forget(cpaths_buffer); // must be leaked since it holds a pointer to c++-allocated memory...
+    ffi::DisposeExportedCPaths64(cpaths_ptr); // ...which is properly freed here instead
+
+    return result;
+}
+
 #[derive(Error, Debug)]
 pub enum BooleanOpError {
     #[error("argument \"cliptype\" is not a valid ClipType enum")]
@@ -205,7 +232,7 @@ where
     let sol_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();      // set to point to allocated memory by the foreign function
     let sol_open_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut(); //
 
-    let errcode = unsafe {
+    let errcode = unsafe { 
         ffi::BooleanOp64(
             cliptype as u8,
             fillrule as u8,
@@ -213,7 +240,7 @@ where
             std::ptr::null_mut(), // a null pointer is interpreted as an empty set of paths
             clip_buffer.as_ptr(),
             sol_buffer,
-            sol_open_buffer, // unused, but should point to an empty CPaths64 that needs freeing
+            sol_open_buffer, // unused, but should point to an empty CPaths64 that needs freeing*
             preserve_collinear,
             reverse_solution,
         )
@@ -229,18 +256,8 @@ where
         }
     }
 
-    // sol_buffer and sol_open_buffer are set by BooleanOp64 to point to the result
-    let buffer_len = unsafe { **sol_buffer } as size_t; // first entry in allocated memory should return length
-    let cpaths_buffer = unsafe { Vec::from_raw_parts(*sol_buffer, buffer_len, buffer_len) };
-    
-    let solution = vec_from_cpaths::<T>(&cpaths_buffer);
-    
-    // free the buffers
-    std::mem::forget(cpaths_buffer); // must be leaked since it holds a pointer to c++-allocated memory
-    unsafe {
-        ffi::DisposeExportedCPaths64(sol_buffer);
-        ffi::DisposeExportedCPaths64(sol_open_buffer);
-    }
+    let solution = unsafe { vec_from_raw_cpaths(sol_buffer) };
+    unsafe { ffi::DisposeExportedCPaths64(sol_open_buffer); } // *freed here
 
     return Ok(solution);
 }
@@ -285,7 +302,7 @@ where
     }
 }
 
-pub fn inflate_paths<T>(
+pub fn inflate_paths_ext<T>(
     paths: &Vec<Vec<T>>,
     delta: f64,
     jointype: JoinType,
@@ -300,7 +317,7 @@ where
     let input_buffer = cpaths_from_vec(paths);
     let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
 
-    unsafe {
+    let result = unsafe {
         *result_buffer = ffi::InflatePaths64(
             input_buffer.as_ptr(),
             delta as c_double,
@@ -309,18 +326,18 @@ where
             miter_limit as c_double,
             arc_tolerance as c_double,
             reverse_solution,
-        )
-    }
-
-    let buffer_len = unsafe { **result_buffer } as size_t;
-    let cpaths_buffer = unsafe { Vec::from_raw_parts(*result_buffer, buffer_len, buffer_len) };
-
-    let result = vec_from_cpaths::<T>(&cpaths_buffer);
-    
-    std::mem::forget(cpaths_buffer);
-    unsafe { ffi::DisposeExportedCPaths64(result_buffer); }
+        );
+        vec_from_raw_cpaths(result_buffer)
+    };
 
     return result;
+}
+
+pub fn inflate_paths<T>(paths: &Vec<Vec<T>>, delta: f64, jointype: JoinType, endtype: EndType) -> Vec<Vec<T>>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    inflate_paths_ext(paths, delta, jointype, endtype, 2.0, 0.0, false)
 }
 
 pub fn simplify_paths<T>(paths: &Vec<Vec<T>>, epsilon: f64) -> Vec<Vec<T>>
@@ -330,29 +347,81 @@ where
     let input_buffer = cpaths_from_vec(paths);
     let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
 
-    unsafe {
+    let result = unsafe {
         *result_buffer = ffi::SimplifyPaths64(
             input_buffer.as_ptr(),
             epsilon,
             false,
-        )
-    }
-
-    let buffer_len = unsafe { **result_buffer } as size_t;
-    let cpaths_buffer = unsafe { Vec::from_raw_parts(*result_buffer, buffer_len, buffer_len) };
-
-    let result = vec_from_cpaths::<T>(&cpaths_buffer);
-    
-    std::mem::forget(cpaths_buffer);
-    unsafe { ffi::DisposeExportedCPaths64(result_buffer); }
+        );
+        vec_from_raw_cpaths(result_buffer)
+    };
 
     return result;
+}
+
+#[derive(Error, Debug)]
+pub enum RectClipError {
+    #[error("the provided rectangle has 0 or negative area")]
+    CRectIsEmpty,
+    #[error("expected paths, found null")]
+    NullPaths,
+}
+
+pub fn rect_clip_ext<R, T>(rect: &R, paths: &Vec<Vec<T>>) -> Result<Vec<Vec<T>>, RectClipError>
+where
+    R: Into<[c_long; 4]> + From<[c_long; 4]> + Copy,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let crect = ffi::CRect64::from((*rect).into());
+
+    let input_buffer = cpaths_from_vec(paths);
+    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
+
+    let result = unsafe {
+        *result_buffer = ffi::RectClip64(
+            &crect,
+            input_buffer.as_ptr(),
+        );
+
+        // RectClip64 returns a nullptr to signal an error
+        if (*result_buffer).is_null() {
+            if (crect.right <= crect.left) || (crect.bottom <= crect.top) {
+                return Err(RectClipError::CRectIsEmpty);
+            } else {
+                return Err(RectClipError::NullPaths);
+            }
+        }
+
+        vec_from_raw_cpaths(result_buffer)
+    };
+
+    return Ok(result);
+}
+
+pub fn rect_clip<R, T>(rect: &R, paths: &Vec<Vec<T>>) -> Vec<Vec<T>>
+where
+    R: Into<[c_long; 4]> + From<[c_long; 4]> + Copy,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    match rect_clip_ext(rect, paths) {
+        Ok(res) => res,
+        Err(e) => panic!("rect_clip_ext returned an error: {}", e),
+    }
+}
+
+pub fn rect_clip_lines<R, T>(rect: &R, paths: &Vec<Vec<T>>) -> Vec<Vec<T>>
+where
+    R: Into<[c_long; 4]> + From<[c_long; 4]> + Copy,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    unimplemented!()
 }
 
 #[cfg(test)]
 mod tests {
 
-    use crate::{boolean_op, intersect, inflate_paths, simplify_paths, ClipType, FillRule, JoinType, EndType};
+    use std::f64::consts::PI;
+    use crate::*;
     use glam::I64Vec2;
 
     #[test]
@@ -376,20 +445,6 @@ mod tests {
     }
 
     #[test]
-    fn inflate_paths_test() {
-        let paths = vec![vec![
-            I64Vec2::new(100, 100),
-            I64Vec2::new(1500, 100),
-            I64Vec2::new(100, 1500),
-            I64Vec2::new(1500, 1500),
-        ]];
-
-        let mut res = inflate_paths(&paths, 200.0, JoinType::Miter, EndType::Square, 2.0, 0.0, false);
-        res = simplify_paths(&res, 100.0);
-        assert_eq!(res[0].len(), 10);
-    }
-
-    #[test]
     fn invalid_cliptype_test() {
         let box1_subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
         let box2_clip = vec![vec![I64Vec2::new(-48, -48), I64Vec2::new(-48, 16), I64Vec2::new(16, 16), I64Vec2::new(16, -48)]];
@@ -403,5 +458,40 @@ mod tests {
         let box2_clip = vec![vec![I64Vec2::new(-48, -48), I64Vec2::new(-48, 16), I64Vec2::new(16, 16), I64Vec2::new(16, -48)]];
         let invalid_fillrule: FillRule  = unsafe { std::mem::transmute(100 as u8) };
         assert!(boolean_op(&box1_subj, &box2_clip, invalid_fillrule, ClipType::Intersection, true, false).is_err());
+    }
+
+    #[test]
+    fn inflate_paths_test() {
+        let paths = vec![vec![
+            I64Vec2::new(100, 100),
+            I64Vec2::new(1500, 100),
+            I64Vec2::new(100, 1500),
+            I64Vec2::new(1500, 1500),
+        ]];
+
+        let mut res = inflate_paths(&paths, 200.0, JoinType::Miter, EndType::Square);
+        res = simplify_paths(&res, 100.0);
+        assert_eq!(res[0].len(), 10);
+    }
+
+    #[test]
+    fn rect_clip_test() {
+        let radius = 100.0 * 2.0_f64.sqrt();
+        let n_points = 32;
+        let circle_x = |i| radius * (i as f64/n_points as f64 * 2.0*PI).cos();
+        let circle_y = |i| radius * (i as f64/n_points as f64 * 2.0*PI).sin();
+
+        let circle_vertices: Vec<Vec<I64Vec2>> = vec![(0..n_points).map(|i| I64Vec2::new(circle_x(i) as i64, circle_y(i) as i64)).collect()];
+        let rect = [-50, -50, 50, 50];
+
+        let res = rect_clip(&rect, &circle_vertices);
+        assert_eq!(res[0].len(), 4);
+    }
+
+    #[test]
+    fn crect_is_empty_test() {
+        let subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
+        let rect = [0, 0, 0, 0];
+        assert!(rect_clip_ext(&rect, &subj).is_err());
     }
 }
