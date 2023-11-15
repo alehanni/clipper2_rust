@@ -1,6 +1,6 @@
 #![allow(unused_must_use, dead_code)]
 use libc::{c_long, size_t, c_double};
-use std::{vec::Vec, result};
+//use std::vec::Vec;
 use thiserror::Error;
 
 mod ffi {
@@ -383,7 +383,7 @@ where
             input_buffer.as_ptr(),
         );
 
-        // RectClip64 returns a nullptr to signal an error
+        // a nullptr is returned if an error occurred
         if (*result_buffer).is_null() {
             if (crect.right <= crect.left) || (crect.bottom <= crect.top) {
                 return Err(RectClipError::CRectIsEmpty);
@@ -409,12 +409,46 @@ where
     }
 }
 
+pub fn rect_clip_lines_ext<R, T>(rect: &R, paths: &Vec<Vec<T>>) -> Result<Vec<Vec<T>>, RectClipError>
+where
+    R: Into<[c_long; 4]> + From<[c_long; 4]> + Copy,
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let crect = ffi::CRect64::from((*rect).into());
+
+    let input_buffer = cpaths_from_vec(paths);
+    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
+
+    let result = unsafe {
+        *result_buffer = ffi::RectClipLines64(
+            &crect,
+            input_buffer.as_ptr(),
+        );
+
+        // a nullptr is returned if an error occurred
+        if (*result_buffer).is_null() {
+            if (crect.right <= crect.left) || (crect.bottom <= crect.top) {
+                return Err(RectClipError::CRectIsEmpty);
+            } else {
+                return Err(RectClipError::NullPaths);
+            }
+        }
+
+        vec_from_raw_cpaths(result_buffer)
+    };
+
+    return Ok(result);
+}
+
 pub fn rect_clip_lines<R, T>(rect: &R, paths: &Vec<Vec<T>>) -> Vec<Vec<T>>
 where
     R: Into<[c_long; 4]> + From<[c_long; 4]> + Copy,
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
-    unimplemented!()
+    match rect_clip_lines_ext(rect, paths) {
+        Ok(res) => res,
+        Err(e) => panic!("rect_clip_lines_ext returned an error: {}", e),
+    }
 }
 
 #[cfg(test)]
@@ -489,9 +523,16 @@ mod tests {
     }
 
     #[test]
-    fn crect_is_empty_test() {
+    fn rect_clip_empty_test() {
         let subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
         let rect = [0, 0, 0, 0];
         assert!(rect_clip_ext(&rect, &subj).is_err());
+    }
+
+    #[test]
+    fn rect_clip_lines_empty_test() {
+        let subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
+        let rect = [0, 0, 0, 0];
+        assert!(rect_clip_lines_ext(&rect, &subj).is_err());
     }
 }

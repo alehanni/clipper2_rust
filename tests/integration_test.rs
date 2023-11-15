@@ -263,3 +263,44 @@ fn plot_rect_clip() {
 
     root.present().unwrap();
 }
+
+#[test]
+fn plot_rect_clip_lines() {
+    let mut rng = Xoshiro256StarStar::seed_from_u64(0xC0FFEE);
+    let distr = Uniform::from(0..500);
+
+    // generate pseudo-random paths
+    let mut rand_path_vertices: Vec<Vec<I64Vec2>> = vec![vec![]];
+    for _ in 0..50 {
+        let offx = distr.sample(&mut rng);
+        let offy = distr.sample(&mut rng);
+        rand_path_vertices[0].push(I64Vec2::new(offx, offy));
+    }
+
+    // clip with rect_clip_lines
+    let rect = [100, 100, 400, 400];
+    let clipped_vertices = rect_clip_lines(&rect, &rand_path_vertices);
+
+    // draw solution
+    let root = SVGBackend::new("test_plots/6_rect_clip_lines.svg", (500, 500)).into_drawing_area();
+    root.fill(&TRANSPARENT).unwrap();
+
+    let mut chart = ChartBuilder::on(&root)
+        .build_cartesian_2d(0.0..500.0, 0.0..500.0).unwrap();
+
+    for path in rand_path_vertices {
+        chart.draw_series(std::iter::once(PathElement::new(
+            ivec_to_cartesian(path.clone()),
+            RGBColor(128, 128, 128),
+        ))).unwrap();
+    }
+
+    for path in clipped_vertices {
+        chart.draw_series(std::iter::once(PathElement::new(
+            ivec_to_cartesian(path.clone()),
+            RGBColor(255, 0, 255),
+        ))).unwrap();
+    }
+
+    root.present().unwrap();
+}
