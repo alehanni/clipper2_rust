@@ -163,7 +163,7 @@ where
 fn vec_from_cpaths<T>(cpaths_buffer: &Vec<c_long>) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
-{   
+{
     let n_paths = cpaths_buffer[1];
 
     let mut cpaths_iter = cpaths_buffer.into_iter();
@@ -173,7 +173,8 @@ where
     let mut paths64 = Vec::<Vec<T>>::with_capacity(n_paths as size_t);
     for _ in 0..n_paths {
         let path_len = *cpaths_iter.next().unwrap();
-        debug_assert_eq!(0, *cpaths_iter.next().unwrap()); // this should always be 0
+        let zero = *cpaths_iter.next().unwrap(); // this should always be 0
+        debug_assert_eq!(0, zero);
 
         let mut path = Vec::<T>::with_capacity(2*path_len as size_t);
         for _ in 0..path_len { // change when https://github.com/rust-lang/rust/issues/98326 has been closed?
