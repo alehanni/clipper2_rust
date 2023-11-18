@@ -1,6 +1,4 @@
-#![allow(unused_must_use, dead_code)]
 use libc::{c_long, size_t, c_double};
-//use std::vec::Vec;
 use thiserror::Error;
 
 mod ffi {
@@ -65,13 +63,30 @@ mod ffi {
             paths: CPaths64,
         ) -> CPaths64Mut;
 
-        pub fn DisposeExportedCPaths64(p: CPaths64Ref);
+        pub fn MinkowskiSum64(
+            pattern: CPaths64,
+            path: CPaths64,
+            is_closed: bool,
+        ) -> CPaths64Mut;
+
+        pub fn MinkowskiDiff64(
+            pattern: CPaths64,
+            path: CPaths64,
+            is_closed: bool,
+        ) -> CPaths64Mut;
 
         pub fn SimplifyPaths64(
             paths: CPaths64,
             epsilon: c_double,
             is_open_path: bool,
         ) -> CPaths64Mut;
+
+        pub fn TrimCollinear64(
+            paths: CPaths64,
+            is_open_path: bool,
+        ) -> CPaths64Mut;
+
+        pub fn DisposeExportedCPaths64(p: CPaths64Ref);
     }
 }
 
@@ -160,6 +175,32 @@ where
     return cpaths_buffer;
 }
 
+// single-path special case of cpaths_from_vec
+fn cpaths_from_coords<T>(coords: &Vec<T>) -> Vec<c_long>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let n_coords = coords.len();
+    let buffer_len = 2 * (n_coords + 2);
+
+    let mut cpaths_buffer = vec![0 as c_long; buffer_len];
+
+    cpaths_buffer[0] = buffer_len as i64;
+    cpaths_buffer[1] = 1; // only 1 path
+    cpaths_buffer[2] = n_coords as i64;
+    cpaths_buffer[3] = 0;
+
+    let mut i = 4;
+    for coord in coords {
+        let coord: [c_long; 2] = (*coord).into();
+        cpaths_buffer[i] = coord[0];
+        cpaths_buffer[i+1] = coord[1];
+        i += 2;
+    }
+
+    return cpaths_buffer;
+}
+
 fn vec_from_cpaths<T>(cpaths_buffer: &Vec<c_long>) -> Vec<Vec<T>>
 where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
@@ -195,7 +236,7 @@ where
     T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
 {
     let buffer_len = **cpaths_ptr as size_t;
-    let cpaths_buffer = Vec::from_raw_parts(*cpaths_ptr, buffer_len, buffer_len);
+    let cpaths_buffer = Vec::from_raw_parts(*cpaths_ptr, buffer_len, buffer_len); // this vec can not be re-alloc'd or freed with rust's allocator
 
     let result = vec_from_cpaths::<T>(&cpaths_buffer);
     
@@ -230,7 +271,7 @@ where
 {
     let subj_buffer = cpaths_from_vec(subjects);
     let clip_buffer = cpaths_from_vec(clips);
-    let sol_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();      // set to point to allocated memory by the foreign function
+    let sol_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();      // the foreign function sets these to point to allocated memory
     let sol_open_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut(); //
 
     let errcode = unsafe { 
@@ -241,7 +282,7 @@ where
             std::ptr::null_mut(), // a null pointer is interpreted as an empty set of paths
             clip_buffer.as_ptr(),
             sol_buffer,
-            sol_open_buffer, // unused, but should point to an empty CPaths64 that needs freeing*
+            sol_open_buffer, // unused, but should point to an empty CPaths64 that needs freeing* (on errcode==0)
             preserve_collinear,
             reverse_solution,
         )
@@ -341,25 +382,6 @@ where
     inflate_paths_ext(paths, delta, jointype, endtype, 2.0, 0.0, false)
 }
 
-pub fn simplify_paths<T>(paths: &Vec<Vec<T>>, epsilon: f64) -> Vec<Vec<T>>
-where
-    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
-{
-    let input_buffer = cpaths_from_vec(paths);
-    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
-
-    let result = unsafe {
-        *result_buffer = ffi::SimplifyPaths64(
-            input_buffer.as_ptr(),
-            epsilon,
-            false,
-        );
-        vec_from_raw_cpaths(result_buffer)
-    };
-
-    return result;
-}
-
 #[derive(Error, Debug)]
 pub enum RectClipError {
     #[error("the provided rectangle has 0 or negative area")]
@@ -389,7 +411,7 @@ where
             if (crect.right <= crect.left) || (crect.bottom <= crect.top) {
                 return Err(RectClipError::CRectIsEmpty);
             } else {
-                return Err(RectClipError::NullPaths);
+                return Err(RectClipError::NullPaths); // this may not even be reachable
             }
         }
 
@@ -450,6 +472,97 @@ where
         Ok(res) => res,
         Err(e) => panic!("rect_clip_lines_ext returned an error: {}", e),
     }
+}
+
+pub fn minkowski_sum<T>(pattern: &Vec<T>, path: &Vec<T>, is_closed: bool) -> Vec<Vec<T>>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let pattern_buffer = cpaths_from_coords(pattern); // the original library api uses a single pattern/path
+    let path_buffer = cpaths_from_coords(path);       // but the exported functions only deal with paths (plural)
+    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
+
+    let result = unsafe {
+        *result_buffer = ffi::MinkowskiSum64(
+            pattern_buffer.as_ptr(),
+            path_buffer.as_ptr(),
+            is_closed
+        );
+        vec_from_raw_cpaths(result_buffer)
+    };
+
+    return result;
+}
+
+pub fn minkowski_diff<T>(pattern: &Vec<T>, path: &Vec<T>, is_closed: bool) -> Vec<Vec<T>>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let pattern_buffer = cpaths_from_coords(pattern);
+    let path_buffer = cpaths_from_coords(path);
+    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
+
+    let result = unsafe {
+        *result_buffer = ffi::MinkowskiDiff64(
+            pattern_buffer.as_ptr(),
+            path_buffer.as_ptr(),
+            is_closed
+        );
+        vec_from_raw_cpaths(result_buffer)
+    };
+
+    return result;
+}
+
+pub fn simplify_paths_ext<T>(paths: &Vec<Vec<T>>, epsilon: f64, is_open_path: bool) -> Vec<Vec<T>>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let input_buffer = cpaths_from_vec(paths);
+    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
+
+    let result = unsafe {
+        *result_buffer = ffi::SimplifyPaths64(
+            input_buffer.as_ptr(),
+            epsilon,
+            is_open_path,
+        );
+        vec_from_raw_cpaths(result_buffer)
+    };
+
+    return result;
+}
+
+pub fn simplify_paths<T>(paths: &Vec<Vec<T>>, epsilon: f64) -> Vec<Vec<T>>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    simplify_paths_ext(paths, epsilon, false)
+}
+
+pub fn trim_collinear_ext<T>(path: &Vec<T>, is_open_path: bool) -> Vec<T>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    let input_buffer = cpaths_from_coords(path);
+    let result_buffer: ffi::CPaths64Ref = &mut std::ptr::null_mut();
+
+    let mut result = unsafe {
+        *result_buffer = ffi::TrimCollinear64(
+            input_buffer.as_ptr(),
+            is_open_path,
+        );
+        vec_from_raw_cpaths(result_buffer)
+    };
+
+    return result.pop().unwrap();
+}
+
+pub fn trim_collinear<T>(path: &Vec<T>) -> Vec<T>
+where
+    T: Into<[c_long; 2]> + From<[c_long; 2]> + Copy,
+{
+    trim_collinear_ext(path, false)
 }
 
 #[cfg(test)]
@@ -535,5 +648,23 @@ mod tests {
         let subj = vec![vec![I64Vec2::new(48, 48), I64Vec2::new(48, -16), I64Vec2::new(-16, -16), I64Vec2::new(-16, 48)]];
         let rect = [0, 0, 0, 0];
         assert!(rect_clip_lines_ext(&rect, &subj).is_err());
+    }
+
+    #[test]
+    fn minkowski_sum_closed_test() {
+        let box1_pattern = vec![I64Vec2::new(20, 20), I64Vec2::new(20, 0), I64Vec2::new(0, 0), I64Vec2::new(0, 20)];
+        let box2_path = vec![I64Vec2::new(10, 10), I64Vec2::new(10, 40), I64Vec2::new(40, 40), I64Vec2::new(40, 10)];
+        let res = minkowski_sum(&box1_pattern, &box2_path, true);
+        assert_eq!(trim_collinear(&res[0]), [I64Vec2::new(60, 10), I64Vec2::new(60, 60), I64Vec2::new(10, 60), I64Vec2::new(10, 10)]);
+        assert_eq!(trim_collinear(&res[1]), [I64Vec2::new(30, 40), I64Vec2::new(40, 40), I64Vec2::new(40, 30), I64Vec2::new(30, 30)]);
+    }
+
+    #[test]
+    fn minkowski_diff_closed_test() {
+        let box1_pattern = vec![I64Vec2::new(20, 20), I64Vec2::new(20, 0), I64Vec2::new(0, 0), I64Vec2::new(0, 20)];
+        let box2_path = vec![I64Vec2::new(10, 10), I64Vec2::new(10, 40), I64Vec2::new(40, 40), I64Vec2::new(40, 10)];
+        let res = minkowski_diff(&box1_pattern, &box2_path, true);
+        assert_eq!(trim_collinear(&res[0]), [I64Vec2::new(40, -10), I64Vec2::new(40, 40), I64Vec2::new(-10, 40), I64Vec2::new(-10, -10)]);
+        assert_eq!(trim_collinear(&res[1]), [I64Vec2::new(10, 20), I64Vec2::new(20, 20), I64Vec2::new(20, 10), I64Vec2::new(10, 10)]);
     }
 }

@@ -15,13 +15,6 @@ fn ivec_to_cartesian(input: Vec<I64Vec2>) -> Vec<(f64, f64)> {
 
 #[test]
 fn plot_intersection() {
-    let root = SVGBackend::new("test_plots/0_intersection_test.svg", (500, 500)).into_drawing_area();
-
-    root.fill(&TRANSPARENT).unwrap();
-
-    let mut chart = ChartBuilder::on(&root)
-        .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
-
     let subj_vertices = vec![vec![
         I64Vec2::new(100, 50),
         I64Vec2::new(10, 79),
@@ -39,7 +32,13 @@ fn plot_intersection() {
     ]];
 
     let intersection_vertices = intersect(&subj_vertices, &clip_vertices, FillRule::NonZero);
-    println!("{:?}", intersection_vertices);
+    
+    // draw solution
+    let root = SVGBackend::new("test_plots/0_intersection_test.svg", (500, 500)).into_drawing_area();
+    root.fill(&TRANSPARENT).unwrap();
+
+    let mut chart = ChartBuilder::on(&root)
+        .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
 
     chart.draw_series(std::iter::once(Polygon::new(
         ivec_to_cartesian(intersection_vertices[0].clone()),
@@ -51,13 +50,6 @@ fn plot_intersection() {
 
 #[test]
 fn plot_union() {
-    let root = SVGBackend::new("test_plots/1_union_test.svg", (500, 500)).into_drawing_area();
-
-    root.fill(&TRANSPARENT).unwrap();
-
-    let mut chart = ChartBuilder::on(&root)
-        .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
-
     let subj_vertices = vec![vec![
         I64Vec2::new(100, 50),
         I64Vec2::new(10, 79),
@@ -75,7 +67,13 @@ fn plot_union() {
     ]];
 
     let union_vertices = union(&subj_vertices, &clip_vertices, FillRule::NonZero);
-    println!("{:?}", union_vertices);
+    
+    // draw solution
+    let root = SVGBackend::new("test_plots/1_union_test.svg", (500, 500)).into_drawing_area();
+    root.fill(&TRANSPARENT).unwrap();
+
+    let mut chart = ChartBuilder::on(&root)
+        .build_cartesian_2d(0.0..100.0, 0.0..100.0).unwrap();
 
     chart.draw_series(std::iter::once(Polygon::new(
         ivec_to_cartesian(union_vertices[0].clone()),
@@ -299,6 +297,52 @@ fn plot_rect_clip_lines() {
         chart.draw_series(std::iter::once(PathElement::new(
             ivec_to_cartesian(path.clone()),
             RGBColor(255, 0, 255),
+        ))).unwrap();
+    }
+
+    root.present().unwrap();
+}
+
+#[test]
+fn plot_minkowski() {
+    let origin = I64Vec2::new(50, 50);
+    let radius = 40.0;
+    let n_points = 64;
+    let circle_x = |i| radius * (i as f64/n_points as f64 * 2.0*PI).cos();
+    let circle_y = |i| radius * (i as f64/n_points as f64 * 2.0*PI).sin();
+
+    let circle_pattern: Vec<I64Vec2> = (0..n_points).map(|i| origin + I64Vec2::new(circle_x(i) as i64, circle_y(i) as i64)).collect();
+
+    let box_path = vec![
+        I64Vec2::new(-100, -100),
+        I64Vec2::new(100, -100),
+        I64Vec2::new(100, 100),
+        I64Vec2::new(-100, 100),
+    ];
+
+    let sum_vertices = minkowski_sum(&circle_pattern, &box_path, true);
+    let diff_vertices = minkowski_diff(&circle_pattern, &box_path, true);
+
+    // draw solution
+    let root = SVGBackend::new("test_plots/7_minkowski.svg", (500, 500)).into_drawing_area();
+    root.fill(&TRANSPARENT).unwrap();
+    
+    let mut chart = ChartBuilder::on(&root)
+        .build_cartesian_2d(-250.0..250.0, -250.0..250.0).unwrap();
+
+    for mut path in sum_vertices {
+        path.push(path[0]);
+        chart.draw_series(std::iter::once(PathElement::new(
+            ivec_to_cartesian(path.clone()),
+            RGBColor(255, 0, 196),
+        ))).unwrap();
+    }
+
+    for mut path in diff_vertices {
+        path.push(path[0]);
+        chart.draw_series(std::iter::once(PathElement::new(
+            ivec_to_cartesian(path.clone()),
+            RGBColor(196, 0, 255),
         ))).unwrap();
     }
 
